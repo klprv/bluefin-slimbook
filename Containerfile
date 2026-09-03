@@ -25,15 +25,16 @@ install -d /out
 dnf5 download --destdir=/out slimbook-qc71-kmod-common
 
 install -d -o akmods -g akmods /var/lib/akmods
+chmod 1777 /tmp
 
 srpm=(/usr/src/akmods/slimbook-qc71-kmod-*.src.rpm)
 
 runuser -u akmods -- bash -c \
-    'cd /var/lib/akmods && akmodsbuild --target "$1" --kernels "$2" "$3"' \
+    'cd /var/lib/akmods && HOME=/var/lib/akmods akmodsbuild --target "$1" --kernels "$2" "$3"' \
     _ "${arch}" "${kernel}" "${srpm[0]}"
 
-rpm=(/var/lib/akmods/kmod-slimbook-qc71-"${kernel}"-*.rpm)
-install -m 0644 "${rpm[0]}" /out/
+kmod_rpm=(/var/lib/akmods/kmod-slimbook-qc71-"${kernel}"-*.rpm)
+install -m 0644 "${kmod_rpm[0]}" /out/
 EOF
 
 
