@@ -4,7 +4,6 @@ RUN <<'EOF'
 set -euo pipefail
 
 . /usr/lib/os-release
-
 original_version="${VERSION}"
 
 sed -i \
@@ -12,9 +11,11 @@ sed -i \
     -e "s|^VERSION=.*|VERSION=\"${original_version} + Slimbook\"|" \
     -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"Bluefin DX Slimbook (${original_version})\"|" \
     /usr/lib/os-release
+
+ostree container commit
 EOF
 
 LABEL org.opencontainers.image.title="Bluefin DX Slimbook"
 LABEL org.opencontainers.image.description="Minimal Bluefin DX image for the Slimbook Executive"
 
-RUN ostree container commit
+RUN bootc container lint
