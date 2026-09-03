@@ -21,8 +21,11 @@ dnf5 install -y \
     --setopt=tsflags=noscripts \
     akmod-slimbook-qc71
 
-install -d /out
-dnf5 download --destdir=/out slimbook-qc71-kmod-common
+install -d /out /tmp/qc71
+dnf5 download --destdir=/tmp/qc71 slimbook-qc71-kmod-common
+
+common_rpm=(/tmp/qc71/slimbook-qc71-kmod-common-*.noarch.rpm)
+install -m 0644 "${common_rpm[0]}" /out/
 
 install -d -o akmods -g akmods /var/lib/akmods
 chmod 1777 /tmp
