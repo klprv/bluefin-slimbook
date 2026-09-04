@@ -1,0 +1,32 @@
+name: Cleanup images
+
+on:
+  schedule:
+    - cron: "30 8 * * 0"
+      timezone: "Europe/Paris"
+
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: cleanup-images
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    name: Cleanup GHCR
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    permissions:
+      packages: write
+
+    steps:
+      - name: Delete old untagged images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: bluefin-slimbook
+          package-type: container
+          delete-only-untagged-versions: "true"
+          min-versions-to-keep: 5

@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 ARG BASE_IMAGE=ghcr.io/ublue-os/bluefin-dx:stable
 
 FROM ${BASE_IMAGE} AS qc71-builder
@@ -58,11 +60,11 @@ dnf5 install -y \
     --setopt=tsflags=noscripts \
     akmod-slimbook-qc71
 
-install -d /out /tmp/qc71
+install -d /out/rpms /tmp/qc71
 dnf5 download --destdir=/tmp/qc71 slimbook-qc71-kmod-common
 
 common_rpm=(/tmp/qc71/slimbook-qc71-kmod-common-*.noarch.rpm)
-install -m 0644 "${common_rpm[0]}" /out/
+install -m 0644 "${common_rpm[0]}" /out/rpms/
 
 install -d -o akmods -g akmods /var/lib/akmods
 chmod 1777 /tmp
@@ -74,7 +76,7 @@ runuser -u akmods -- bash -c \
     _ "${arch}" "${kernel}" "${srpm[0]}"
 
 kmod_rpm=(/var/lib/akmods/kmod-slimbook-qc71-"${kernel}"-*.rpm)
-install -m 0644 "${kmod_rpm[0]}" /out/
+install -m 0644 "${kmod_rpm[0]}" /out/rpms/
 
 install -m 0644 /tmp/qc71-signing.der /out/qc71-signing.der
 EOF
@@ -82,7 +84,8 @@ EOF
 
 FROM ${BASE_IMAGE}
 
-COPY --from=qc71-builder /out/ /tmp/qc71/
+COPY --from=qc71-builder /out/rpms/ /tmp/qc71/
+COPY --from=qc71-builder /out/qc71-signing.der /usr/share/bluefin-slimbook/qc71-signing.der
 
 RUN <<'EOF'
 set -euo pipefail
@@ -99,10 +102,6 @@ dnf5 install -y \
     /tmp/qc71/*.rpm \
     slimbook-service
 
-install -Dm0644 \
-    /tmp/qc71/qc71-signing.der \
-    /usr/share/bluefin-slimbook/qc71-signing.der
-
 depmod -a "${kernel}"
 
 test "$(modinfo -k "${kernel}" -F name qc71_laptop)" = "qc71_laptop"
@@ -115,12 +114,19 @@ rpm -q \
     python3-slimbook \
     libslimbook1 >/dev/null
 
+if rpm -q akmod-slimbook-qc71 >/dev/null 2>&1; then
+    echo "akmod-slimbook-qc71 must not be present in the final image" >&2
+    exit 1
+fi
+
 systemctl enable slimbook-service.service
 test "$(systemctl is-enabled slimbook-service.service)" = "enabled"
 
 rm -rf /tmp/qc71
 rm -f /etc/yum.repos.d/slimbook.repo
 dnf5 clean all
+
+test ! -e /etc/yum.repos.d/slimbook.repo
 
 . /usr/lib/os-release
 original_version="${VERSION}"
@@ -136,5 +142,6 @@ EOF
 
 LABEL org.opencontainers.image.title="Bluefin DX Slimbook"
 LABEL org.opencontainers.image.description="Bluefin DX image for the Slimbook Executive"
+LABEL org.opencontainers.image.source="https://github.com/klprv/bluefin-slimbook"
 
 RUN bootc container lint
