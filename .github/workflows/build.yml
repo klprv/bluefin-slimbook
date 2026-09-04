@@ -49,3 +49,5 @@ jobs:
           pull: true
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ env.IMAGE_NAME }}:testing
+          secrets: |
+            "qc71_signing_key=${{ secrets.QC71_SIGNING_KEY }}"
