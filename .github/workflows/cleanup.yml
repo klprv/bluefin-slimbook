@@ -2,6 +2,7 @@ name: Cleanup images
 
 on:
   schedule:
+    # Weekly cleanup.
     - cron: "30 8 * * 0"
       timezone: "Europe/Paris"
 
@@ -23,10 +24,8 @@ jobs:
       packages: write
 
     steps:
-      - name: Delete old untagged images
-        uses: actions/delete-package-versions@v5
+      - name: Delete old images
+        uses: dataaxiom/ghcr-cleanup-action@v1
         with:
-          package-name: bluefin-slimbook
-          package-type: container
-          delete-only-untagged-versions: "true"
-          min-versions-to-keep: 5
+          keep-n-untagged: 5
+          delete-orphaned-images: true

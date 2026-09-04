@@ -6,6 +6,7 @@ on:
       - main
 
   schedule:
+    # Weekly rebuild.
     - cron: "0 8 * * 2"
       timezone: "Europe/Paris"
 
@@ -44,7 +45,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build
+      - name: Build and push
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -52,6 +53,8 @@ jobs:
           platforms: linux/amd64
           pull: true
           push: true
-          tags: ${{ env.IMAGE_NAME }}:testing
+          tags: ${{ env.IMAGE_NAME }}:stable
+
+          # Pass the private key as a BuildKit secret.
           secrets: |
             "qc71_signing_key=${{ secrets.QC71_SIGNING_KEY }}"
