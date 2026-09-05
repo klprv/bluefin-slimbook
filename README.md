@@ -1,6 +1,6 @@
 # Bluefin Slimbook
 
-Bluefin DX image for the Slimbook Executive 14 UC2.
+Bluefin DX image for the Slimbook Executive.
 
 Based on `ghcr.io/ublue-os/bluefin-dx:stable`.
 
