@@ -1,8 +1,8 @@
 # Bluefin Slimbook
 
-Bluefin DX image for the Slimbook Executive.
+Bluefin image for the Slimbook Executive.
 
-Based on `ghcr.io/ublue-os/bluefin-dx:stable`.
+Based on `ghcr.io/projectbluefin/bluefin:stable`.
 
 ## Included
 
@@ -13,7 +13,7 @@ Based on `ghcr.io/ublue-os/bluefin-dx:stable`.
 
 ## Installation
 
-From Bluefin DX:
+From Bluefin:
 
 ```bash
 sudo bootc switch ghcr.io/klprv/bluefin-slimbook:stable

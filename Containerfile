@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG BASE_IMAGE=ghcr.io/ublue-os/bluefin-dx:stable
+ARG BASE_IMAGE=ghcr.io/projectbluefin/bluefin:stable
 
 # Build and sign QC71 for the exact Bluefin kernel.
 FROM ${BASE_IMAGE} AS qc71-builder
@@ -123,16 +123,16 @@ dnf5 clean all
 original_version="${VERSION}"
 
 sed -i \
-    -e 's/^NAME=.*/NAME="Bluefin DX Slimbook"/' \
+    -e 's/^NAME=.*/NAME="Bluefin Slimbook"/' \
     -e "s|^VERSION=.*|VERSION=\"${original_version} + Slimbook\"|" \
-    -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"Bluefin DX Slimbook (${original_version})\"|" \
+    -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"Bluefin Slimbook (${original_version})\"|" \
     /usr/lib/os-release
 
 ostree container commit
 EOF_FINAL
 
-LABEL org.opencontainers.image.title="Bluefin DX Slimbook"
-LABEL org.opencontainers.image.description="Bluefin DX image for the Slimbook Executive"
+LABEL org.opencontainers.image.title="Bluefin Slimbook"
+LABEL org.opencontainers.image.description="Bluefin image for the Slimbook Executive"
 LABEL org.opencontainers.image.source="https://github.com/klprv/bluefin-slimbook"
 
 RUN bootc container lint
