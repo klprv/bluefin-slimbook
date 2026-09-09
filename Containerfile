@@ -71,7 +71,7 @@ common_rpm=(/tmp/qc71/slimbook-qc71-kmod-common-*.noarch.rpm)
 install -m 0644 "${common_rpm[0]}" /out/rpms/
 
 install -d -o akmods -g akmods /var/lib/akmods
-chmod 1777 /tmp
+install -d -m 1777 /tmp /var/tmp
 
 srpm=(/usr/src/akmods/slimbook-qc71-kmod-*.src.rpm)
 
