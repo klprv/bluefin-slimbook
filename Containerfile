@@ -19,13 +19,11 @@ dnf5 install -y --setopt=install_weak_deps=0 \
     akmods \
     kmodtool
 
-# Extract the vendor akmod source without running its automatic build script.
 dnf5 install -y \
     --setopt=install_weak_deps=0 \
     --setopt=tsflags=noscripts \
     akmod-slimbook-qc71
 
-# Both akmodsbuild and rpmbuild need writable temporary directories.
 install -d -m 1777 /tmp /var/tmp
 
 runuser -u akmods -- akmodsbuild \
@@ -59,7 +57,6 @@ systemctl enable slimbook-service.service
 rm -f /etc/yum.repos.d/slimbook.repo
 dnf5 clean all
 
-# Remove build-time state while preserving the RPM and DNF system databases.
 rm -rf \
     /run/dnf \
     /var/cache/libdnf5 \
