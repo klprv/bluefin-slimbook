@@ -58,6 +58,15 @@ systemctl enable slimbook-service.service
 
 rm -f /etc/yum.repos.d/slimbook.repo
 dnf5 clean all
+
+# Remove build-time state while preserving the RPM and DNF system databases.
+rm -rf \
+    /run/dnf \
+    /var/cache/libdnf5 \
+    /var/lib/dnf/repos
+rm -f \
+    /var/cache/ldconfig/aux-cache \
+    /var/log/dnf5.log
 EOF
 
 RUN bootc container lint --fatal-warnings
