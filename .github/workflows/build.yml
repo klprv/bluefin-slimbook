@@ -2,17 +2,25 @@ name: Build
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-26.04
 
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
-
-      - run: docker build -t bluefin-slimbook:test .
+      - name: Build image
+        run: |
+          docker build \
+            --pull \
+            --progress=plain \
+            --file Containerfile \
+            --tag bluefin-slimbook:test \
+            .
