@@ -19,12 +19,14 @@ dnf5 install -y --setopt=install_weak_deps=0 \
     akmods \
     kmodtool
 
+# Extract the vendor akmod source without running its automatic build script.
 dnf5 install -y \
     --setopt=install_weak_deps=0 \
     --setopt=tsflags=noscripts \
     akmod-slimbook-qc71
 
-chmod 1777 /tmp
+# Both akmodsbuild and rpmbuild need writable temporary directories.
+install -d -m 1777 /tmp /var/tmp
 
 runuser -u akmods -- akmodsbuild \
     --kernels "${KERNEL}" \
@@ -36,9 +38,7 @@ EOF
 
 FROM ${BASE_IMAGE}
 
-COPY --from=qc71-builder /qc71.rpm /tmp/qc71.rpm
-
-RUN <<'EOF' bash
+RUN --mount=type=bind,from=qc71-builder,source=/qc71.rpm,target=/run/qc71.rpm <<'EOF' bash
 set -euo pipefail
 
 FEDORA="$(rpm -E %fedora)"
@@ -49,15 +49,15 @@ dnf5 config-manager addrepo \
     --save-filename=slimbook
 
 dnf5 install -y --setopt=install_weak_deps=0 \
-    /tmp/qc71.rpm \
+    /run/qc71.rpm \
     slimbook-meta-executive
 
 depmod -a "${KERNEL}"
-modinfo -k "${KERNEL}" qc71_laptop > /dev/null
+modinfo -k "${KERNEL}" qc71_laptop
 systemctl enable slimbook-service.service
 
-rm -f /tmp/qc71.rpm /etc/yum.repos.d/slimbook.repo
+rm -f /etc/yum.repos.d/slimbook.repo
 dnf5 clean all
-
-bootc container lint --fatal-warnings
 EOF
+
+RUN bootc container lint --fatal-warnings
