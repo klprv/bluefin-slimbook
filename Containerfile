@@ -8,7 +8,6 @@ set -euo pipefail
 
 FEDORA="$(rpm -E %fedora)"
 KERNEL="$(rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}')"
-ARCH="$(rpm -E '%{_arch}')"
 
 dnf5 config-manager addrepo \
     --from-repofile="https://download.opensuse.org/repositories/home:/Slimbook/Fedora_${FEDORA}/home:Slimbook.repo" \
@@ -24,7 +23,7 @@ dnf5 install -y \
     --setopt=tsflags=noscripts \
     akmod-slimbook-qc71
 
-install -d -o akmods -g akmods /var/lib/akmods
+chmod 1777 /tmp
 
 SRPM="$(find /usr/src/akmods \
     -maxdepth 1 \
@@ -34,14 +33,9 @@ SRPM="$(find /usr/src/akmods \
 test -n "${SRPM}"
 
 su -s /bin/bash akmods -c \
-    "cd /var/lib/akmods && \
-     HOME=/var/lib/akmods \
-     akmodsbuild \
-        --target ${ARCH} \
-        --kernels ${KERNEL} \
-        ${SRPM}"
+    "cd /tmp && akmodsbuild --kernels ${KERNEL} ${SRPM}"
 
-cp /var/lib/akmods/kmod-slimbook-qc71-${KERNEL}-*.rpm /qc71.rpm
+cp /tmp/kmod-slimbook-qc71-${KERNEL}-*.rpm /qc71.rpm
 EOF
 
 
@@ -61,8 +55,6 @@ dnf5 config-manager addrepo \
 dnf5 install -y --setopt=install_weak_deps=0 \
     /tmp/qc71.rpm \
     slimbook-meta-executive
-
-systemctl enable slimbook-service.service
 
 rm -f \
     /tmp/qc71.rpm \
