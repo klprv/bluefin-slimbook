@@ -1,13 +1,24 @@
-name: Build
+name: Build and publish
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  BUILD_TAG: build-${{ github.run_number }}-${{ github.run_attempt }}
 
 jobs:
   build:
@@ -23,7 +34,26 @@ jobs:
         run: |
           docker build \
             --pull \
+            --no-cache \
             --progress=plain \
             --file Containerfile \
-            --tag bluefin-slimbook:test \
+            --tag "${IMAGE}:${BUILD_TAG}" \
+            --tag "${IMAGE}:stable" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${BUILD_TAG}" \
             .
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          docker push "${IMAGE}:${BUILD_TAG}"
+          docker push "${IMAGE}:stable"
