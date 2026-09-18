@@ -11,6 +11,7 @@ baseurl=file:///run/build-inputs/rpms
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-$releasever-$basearch
        file:///run/build-inputs/slimbook.asc
+       file:///run/build-inputs/mullvad.asc
 REPO
 
 RUN --mount=type=tmpfs,target=/tmp \
@@ -25,6 +26,12 @@ dnf5 config-manager addrepo \
     --from-repofile="${SLIMBOOK_REPO}/home:Slimbook.repo" \
     --save-filename=slimbook
 
+dnf5 config-manager addrepo \
+    --from-repofile=https://repository.mullvad.net/rpm/stable/mullvad.repo \
+    --save-filename=mullvad
+
+dnf5 config-manager setopt mullvad-stable.includepkgs=mullvad-vpn
+
 dnf5 --refresh download -y \
     --resolve \
     --arch=x86_64 \
@@ -35,16 +42,19 @@ dnf5 --refresh download -y \
     akmods \
     kmodtool \
     akmod-slimbook-qc71 \
-    slimbook-meta-executive
+    slimbook-meta-executive \
+    mullvad-vpn
 
 curl -fsSL "${SLIMBOOK_REPO}/repodata/repomd.xml.key" \
     -o /inputs/slimbook.asc
+curl -fsSL https://repository.mullvad.net/rpm/mullvad-keyring.asc \
+    -o /inputs/mullvad.asc
 
 dnf5 install -y --setopt=install_weak_deps=0 createrepo_c
 createrepo_c /inputs/rpms
 
 cd /inputs
-sha256sum rpms/*.rpm slimbook.asc | LC_ALL=C sort > manifest.sha256
+sha256sum rpms/*.rpm *.asc | LC_ALL=C sort > manifest.sha256
 EOF
 
 FROM scratch AS inputs
@@ -93,7 +103,8 @@ RUN --network=none \
     --mount=type=tmpfs,target=/var/tmp \
     --mount=type=tmpfs,target=/var/cache \
     --mount=type=tmpfs,target=/var/log \
-    --mount=type=tmpfs,target=/var/lib/dnf <<'EOF' bash
+    --mount=type=tmpfs,target=/var/lib/dnf \
+    --mount=type=tmpfs,target=/var/opt <<'EOF' bash
 set -euo pipefail
 
 KERNEL="$(rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}')"
@@ -102,12 +113,28 @@ dnf5 --repo=build-inputs install -y \
     --setopt=install_weak_deps=0 \
     --exclude='akmod-*' \
     /run/qc71.rpm \
-    slimbook-meta-executive
+    slimbook-meta-executive \
+    mullvad-vpn
 
 depmod -a "${KERNEL}"
 modinfo -k "${KERNEL}" qc71_laptop
 modinfo -k "${KERNEL}" dwmac-motorcomm
-systemctl enable slimbook-service.service
+
+install -d /usr/lib/opt
+mv "/opt/Mullvad VPN" /usr/lib/opt/
+
+cat > /usr/lib/tmpfiles.d/mullvad-vpn.conf <<'TMPFILES'
+L /var/opt/Mullvad\x20VPN - - - - /usr/lib/opt/Mullvad\x20VPN
+TMPFILES
+
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/mullvad-vpn.conf
+test -x "/opt/Mullvad VPN/mullvad-vpn"
+mullvad --version
+
+systemctl enable \
+    slimbook-service.service \
+    mullvad-daemon.service \
+    mullvad-early-boot-blocking.service
 EOF
 
 RUN bootc container lint --fatal-warnings
