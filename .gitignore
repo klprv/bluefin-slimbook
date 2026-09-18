@@ -1,0 +1,7 @@
+# Private signing keys
+*.key
+*.priv
+cosign.key
+
+# Local key material
+qc71-keys/
