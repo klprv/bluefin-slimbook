@@ -72,6 +72,8 @@ dnf5 --repo=build-inputs install -y \
     --setopt=tsflags=noscripts \
     akmod-slimbook-qc71
 
+chmod 1777 /tmp /var/tmp
+
 runuser -u akmods -- akmodsbuild \
     --kernels "${KERNEL}" \
     --outputdir /tmp \
