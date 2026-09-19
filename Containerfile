@@ -43,19 +43,29 @@ curl -fsSL "${SLIMBOOK_REPO}/repodata/repomd.xml.key" \
 
 dnf5 install -y --setopt=install_weak_deps=0 createrepo_c
 createrepo_c /inputs/rpms
+
+# Hash payloads, not repository timestamps or build paths.
+cd /inputs
+sha256sum kernel build-inputs.repo slimbook.asc rpms/*.rpm \
+    | LC_ALL=C sort -k2 > manifest.sha256
 EOF
+
+# Export this exact package set for the check and subsequent build.
+FROM scratch AS inputs
+COPY --from=packages /inputs/ /
 
 # Build QC71 for the image kernel, never for the CI runner kernel.
 FROM ${BASE_IMAGE} AS qc71-builder
 
 RUN --network=none \
     --mount=type=tmpfs,target=/run \
-    --mount=type=bind,from=packages,source=/inputs,target=/run/build-inputs \
-    --mount=type=bind,from=packages,source=/inputs/build-inputs.repo,target=/etc/yum.repos.d/build-inputs.repo \
+    --mount=type=bind,from=inputs,source=/,target=/run/build-inputs \
+    --mount=type=bind,from=inputs,source=/build-inputs.repo,target=/etc/yum.repos.d/build-inputs.repo \
     --mount=type=tmpfs,target=/tmp \
     --mount=type=tmpfs,target=/var/tmp <<'EOF' bash
 set -euo pipefail
 KERNEL="$(cat /run/build-inputs/kernel)"
+(cd /run/build-inputs && sha256sum --check --quiet manifest.sha256)
 
 # Replace Bluefin's headers placeholder only when the real files are absent.
 if rpm -q "kernel-devel-${KERNEL}" >/dev/null 2>&1 && \
@@ -117,8 +127,8 @@ FROM ${BASE_IMAGE} AS final
 
 RUN --network=none \
     --mount=type=tmpfs,target=/run \
-    --mount=type=bind,from=packages,source=/inputs,target=/run/build-inputs \
-    --mount=type=bind,from=packages,source=/inputs/build-inputs.repo,target=/etc/yum.repos.d/build-inputs.repo \
+    --mount=type=bind,from=inputs,source=/,target=/run/build-inputs \
+    --mount=type=bind,from=inputs,source=/build-inputs.repo,target=/etc/yum.repos.d/build-inputs.repo \
     --mount=type=bind,from=qc71-builder,source=/out,target=/run/qc71 \
     --mount=type=tmpfs,target=/tmp \
     --mount=type=tmpfs,target=/var/tmp \
@@ -133,8 +143,6 @@ dnf5 --repo=build-inputs install -y \
     --setopt=install_weak_deps=0 --setopt=localpkg_gpgcheck=0 \
     --exclude='akmod-*' /run/qc71/qc71.rpm slimbook-meta-executive
 
-install -D -m 0644 /run/qc71/qc71-signing.der \
-    /usr/share/bluefin-slimbook/qc71-signing.der
 depmod -a "${KERNEL}"
 VERMAGIC="$(modinfo -k "${KERNEL}" -F vermagic qc71_laptop)"
 [[ "${VERMAGIC%% *}" = "${KERNEL}" ]]
