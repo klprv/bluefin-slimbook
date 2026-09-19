@@ -13,6 +13,7 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,6 +27,8 @@ env:
   BASE_IMAGE: ghcr.io/ublue-os/bluefin-dx:stable
   IMAGE: ghcr.io/${{ github.repository }}
   PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+  CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/build.yml@refs/heads/main
+  OIDC_ISSUER: https://token.actions.githubusercontent.com
 
 jobs:
   build:
@@ -47,32 +50,6 @@ jobs:
         with:
           cosign-release: v3.0.6
 
-      - name: Prepare signing keys
-        env:
-          QC71_SIGNING_KEY: ${{ env.PUBLISH == 'true' && secrets.QC71_SIGNING_KEY || '' }}
-          QC71_SIGNING_CERT: ${{ env.PUBLISH == 'true' && secrets.QC71_SIGNING_CERT || '' }}
-          SIGNING_SECRET: ${{ env.PUBLISH == 'true' && secrets.SIGNING_SECRET || '' }}
-          COSIGN_PASSWORD: ''
-        run: |
-          set -euo pipefail
-          umask 077
-          if [[ "${PUBLISH}" == true ]]; then
-            for name in QC71_SIGNING_KEY QC71_SIGNING_CERT SIGNING_SECRET; do
-              [[ -n "${!name}" ]] || { echo "::error::Missing secret: ${name}"; exit 1; }
-            done
-            printf '%s\n' "${QC71_SIGNING_KEY}" > "${RUNNER_TEMP}/qc71.key"
-            printf '%s\n' "${QC71_SIGNING_CERT}" > "${RUNNER_TEMP}/qc71.crt"
-            printf '%s\n' "${SIGNING_SECRET}" > "${RUNNER_TEMP}/cosign.key"
-            cosign public-key --key "${RUNNER_TEMP}/cosign.key" > "${RUNNER_TEMP}/cosign.pub"
-          else
-            # PRs exercise signing without receiving production keys or publishing.
-            openssl req -new -x509 -newkey rsa:3072 -noenc -sha256 \
-              -days 1 -subj '/CN=QC71 CI test only/' \
-              -keyout "${RUNNER_TEMP}/qc71.key" -out "${RUNNER_TEMP}/qc71.crt"
-          fi
-          openssl x509 -in "${RUNNER_TEMP}/qc71.crt" -checkend 0 -noout
-          openssl x509 -in "${RUNNER_TEMP}/qc71.crt" -outform DER -out "${RUNNER_TEMP}/qc71.der"
-
       - name: Log in to GHCR
         if: env.PUBLISH == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -83,8 +60,17 @@ jobs:
 
       - name: Check inputs
         id: check
+        env:
+          QC71_SIGNING_CERT: ${{ env.PUBLISH == 'true' && secrets.QC71_SIGNING_CERT || '' }}
         run: |
           set -euo pipefail
+          if [[ "${PUBLISH}" == true ]]; then
+            : "${QC71_SIGNING_CERT:?Missing QC71_SIGNING_CERT secret}"
+            printf '%s\n' "${QC71_SIGNING_CERT}" | openssl x509 -checkend 0 -noout
+            printf '%s\n' "${QC71_SIGNING_CERT}" | openssl x509 -outform DER \
+              -out "${RUNNER_TEMP}/qc71.der"
+          fi
+
           BASE_DIGEST="$(docker buildx imagetools inspect "${BASE_IMAGE}" \
             --format '{{json .Manifest}}' | jq -er '.digest')"
           [[ "${BASE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -101,22 +87,28 @@ jobs:
               printf '%s\n' "${BASE_REF}"
               sha256sum Containerfile .github/workflows/build.yml
               cat "${RUNNER_TEMP}/build-inputs/manifest.sha256"
-              # Hash public material using stable relative paths, never private keys.
-              (cd "${RUNNER_TEMP}"; sha256sum qc71.der; \
-                if [[ -f cosign.pub ]]; then sha256sum cosign.pub; fi)
+              if [[ "${PUBLISH}" == true ]]; then
+                (cd "${RUNNER_TEMP}" && sha256sum qc71.der)
+              fi
             } | sha256sum | cut -d ' ' -f 1
           )"
 
+          # Only scheduled runs may skip; push, PR and manual runs always build.
           CHANGED=true
           if [[ "${GITHUB_EVENT_NAME}" == schedule ]]; then
-            if docker buildx imagetools inspect "${IMAGE}:stable" \
-                --format '{{json .Image}}' > "${RUNNER_TEMP}/stable.json"; then
-              PREVIOUS="$(jq -r \
-                '(.["linux/amd64"] // .).config.Labels["io.github.klprv.bluefin-slimbook.inputs"] // ""' \
-                "${RUNNER_TEMP}/stable.json")"
+            if PREVIOUS_DIGEST="$(docker buildx imagetools inspect "${IMAGE}:stable" \
+                --format '{{json .Manifest}}' | jq -er '.digest')" && \
+               [[ "${PREVIOUS_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] && \
+               cosign verify --new-bundle-format=false \
+                --certificate-identity "${CERTIFICATE_IDENTITY}" \
+                --certificate-oidc-issuer "${OIDC_ISSUER}" \
+                "${IMAGE}@${PREVIOUS_DIGEST}" > /dev/null; then
+              PREVIOUS="$(docker buildx imagetools inspect "${IMAGE}@${PREVIOUS_DIGEST}" \
+                --format '{{json .Image}}' | jq -r \
+                '(.["linux/amd64"] // .).config.Labels["io.github.klprv.bluefin-slimbook.inputs"] // ""')"
               [[ "${PREVIOUS}" != "${INPUTS_DIGEST}" ]] || CHANGED=false
             else
-              echo "::warning::Cannot read stable; building rather than assuming it is current."
+              echo '::notice::No verified stable image available; rebuilding.'
             fi
           fi
 
@@ -133,20 +125,30 @@ jobs:
         env:
           BASE_REF: ${{ steps.check.outputs.base }}
           INPUTS_DIGEST: ${{ steps.check.outputs.digest }}
+          QC71_SIGNING_KEY: ${{ env.PUBLISH == 'true' && secrets.QC71_SIGNING_KEY || '' }}
+          QC71_SIGNING_CERT: ${{ env.PUBLISH == 'true' && secrets.QC71_SIGNING_CERT || '' }}
         run: |
           set -euo pipefail
           OUTPUT=type=cacheonly
+          SECRETS=()
           if [[ "${PUBLISH}" == true ]]; then
+            : "${QC71_SIGNING_KEY:?Missing QC71_SIGNING_KEY secret}"
+            : "${QC71_SIGNING_CERT:?Missing QC71_SIGNING_CERT secret}"
             OUTPUT="type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true"
+            SECRETS=(
+              --secret id=qc71_signing_key,env=QC71_SIGNING_KEY
+              --secret id=qc71_signing_cert,env=QC71_SIGNING_CERT
+            )
           fi
-          # Reuse the exact RPMs checked above; do not resolve them a second time.
+
+          # Reuse the checked RPM snapshot. PRs have no secrets and publish nothing.
           docker buildx build --pull --no-cache --progress=plain \
             --platform linux/amd64 --provenance=false \
             --file Containerfile --target final \
             --build-arg "BASE_IMAGE=${BASE_REF}" \
+            --build-arg "QC71_SIGN=${PUBLISH}" \
             --build-context "inputs=${RUNNER_TEMP}/build-inputs" \
-            --secret "id=qc71_signing_key,src=${RUNNER_TEMP}/qc71.key" \
-            --secret "id=qc71_signing_cert,src=${RUNNER_TEMP}/qc71.crt" \
+            "${SECRETS[@]}" \
             --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
             --label "org.opencontainers.image.base.name=${BASE_IMAGE}" \
@@ -157,24 +159,17 @@ jobs:
 
       - name: Sign, verify and publish stable
         if: steps.check.outputs.changed == 'true' && env.PUBLISH == 'true'
-        env:
-          COSIGN_PASSWORD: ''
         run: |
           set -euo pipefail
           DIGEST="$(jq -er '."containerimage.digest"' "${RUNNER_TEMP}/image.json")"
           [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
           REF="${IMAGE}@${DIGEST}"
-          # Preserve the signature format used by containers/image and bootc.
-          cosign sign --yes --new-bundle-format=false --use-signing-config=false \
-            --key "${RUNNER_TEMP}/cosign.key" "${REF}"
+
+          # Keyless GitHub OIDC; retain the format understood by containers/image.
+          cosign sign --yes --new-bundle-format=false --use-signing-config=false "${REF}"
           cosign verify --new-bundle-format=false \
-            --key "${RUNNER_TEMP}/cosign.pub" "${REF}" > /dev/null
+            --certificate-identity "${CERTIFICATE_IDENTITY}" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" "${REF}" > /dev/null
           docker buildx imagetools create --prefer-index=false \
             --tag "${IMAGE}:stable" "${REF}"
           printf '\nPublished `%s:stable` → `%s`\n' "${IMAGE}" "${DIGEST}" >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Remove temporary keys
-        if: always()
-        run: |
-          rm -f "${RUNNER_TEMP}/qc71.key" "${RUNNER_TEMP}/qc71.crt" \
-            "${RUNNER_TEMP}/qc71.der" "${RUNNER_TEMP}/cosign.key" "${RUNNER_TEMP}/cosign.pub"
