@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 
 ARG BASE_IMAGE=ghcr.io/ublue-os/bluefin-dx:stable
+ARG QC71_SIGN=true
 
-# Download one set of RPMs for the builder and the final image.
+# Resolve one package snapshot for both the check and the build.
 FROM ${BASE_IMAGE} AS packages
 
 COPY <<'REPO' /inputs/build-inputs.repo
@@ -17,7 +18,6 @@ REPO
 RUN --mount=type=tmpfs,target=/tmp \
     --mount=type=tmpfs,target=/var/tmp <<'EOF' bash
 set -euo pipefail
-
 FEDORA="$(rpm -E %fedora)"
 ARCH="$(rpm -E '%{_arch}')"
 KERNEL="$(rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n')"
@@ -33,29 +33,26 @@ dnf5 config-manager addrepo \
 
 dnf5 --refresh download --resolve \
     --arch="${ARCH}" --arch=noarch \
-    --destdir=/inputs/rpms \
-    --setopt=install_weak_deps=0 \
+    --destdir=/inputs/rpms --setopt=install_weak_deps=0 \
     "kernel-devel-${KERNEL}" akmods kmodtool \
     akmod-slimbook-qc71 slimbook-meta-executive
 
-curl -fsSL "${SLIMBOOK_REPO}/repodata/repomd.xml.key" \
-    -o /inputs/slimbook.asc
-
+curl -fsSL "${SLIMBOOK_REPO}/repodata/repomd.xml.key" -o /inputs/slimbook.asc
 dnf5 install -y --setopt=install_weak_deps=0 createrepo_c
 createrepo_c /inputs/rpms
 
-# Hash payloads, not repository timestamps or build paths.
+# Ignore generated repository timestamps; hash the actual inputs.
 cd /inputs
 sha256sum kernel build-inputs.repo slimbook.asc rpms/*.rpm \
     | LC_ALL=C sort -k2 > manifest.sha256
 EOF
 
-# Export this exact package set for the check and subsequent build.
 FROM scratch AS inputs
 COPY --from=packages /inputs/ /
 
-# Build QC71 for the image kernel, never for the CI runner kernel.
+# Compile only QC71, for the kernel shipped inside the image.
 FROM ${BASE_IMAGE} AS qc71-builder
+ARG QC71_SIGN
 
 RUN --network=none \
     --mount=type=tmpfs,target=/run \
@@ -67,7 +64,7 @@ set -euo pipefail
 KERNEL="$(cat /run/build-inputs/kernel)"
 (cd /run/build-inputs && sha256sum --check --quiet manifest.sha256)
 
-# Replace Bluefin's headers placeholder only when the real files are absent.
+# Some Bluefin images register kernel-devel without shipping its files.
 if rpm -q "kernel-devel-${KERNEL}" >/dev/null 2>&1 && \
    [[ ! -f "/usr/src/kernels/${KERNEL}/Makefile" ]]; then
     rpm -e --nodeps "kernel-devel-${KERNEL}"
@@ -77,34 +74,37 @@ dnf5 --repo=build-inputs install -y --setopt=install_weak_deps=0 \
     "kernel-devel-${KERNEL}" akmods kmodtool
 test -f "/usr/src/kernels/${KERNEL}/Makefile"
 
-# Only skip the source package's automatic build; run akmodsbuild explicitly.
+# Do not let this source package build for the CI runner's kernel.
 dnf5 --repo=build-inputs install -y \
     --setopt=install_weak_deps=0 --setopt=tsflags=noscripts \
     akmod-slimbook-qc71
 EOF
 
 RUN --network=none \
-    --mount=type=secret,id=qc71_signing_key,required=true \
-    --mount=type=secret,id=qc71_signing_cert,required=true \
+    --mount=type=secret,id=qc71_signing_key \
+    --mount=type=secret,id=qc71_signing_cert \
     --mount=type=tmpfs,target=/etc/pki/akmods \
     --mount=type=tmpfs,target=/tmp \
     --mount=type=tmpfs,target=/var/tmp <<'EOF' bash
 set -euo pipefail
 KERNEL="$(rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}')"
 ARCH="$(rpm -E '%{_arch}')"
+[[ "${QC71_SIGN}" == true || "${QC71_SIGN}" == false ]]
 
-openssl x509 -in /run/secrets/qc71_signing_cert -checkend 0 -noout
-openssl x509 -in /run/secrets/qc71_signing_cert -pubkey -noout > /tmp/cert.pub
-openssl pkey -in /run/secrets/qc71_signing_key -passin pass: -pubout > /tmp/key.pub
-cmp /tmp/cert.pub /tmp/key.pub
+# PRs compile unsigned; release builds must have the real matching key pair.
+if [[ "${QC71_SIGN}" == true ]]; then
+    openssl x509 -in /run/secrets/qc71_signing_cert -checkend 0 -noout
+    openssl x509 -in /run/secrets/qc71_signing_cert -pubkey -noout > /tmp/cert.pub
+    openssl pkey -in /run/secrets/qc71_signing_key -passin pass: -pubout > /tmp/key.pub
+    cmp /tmp/cert.pub /tmp/key.pub
 
-# The private key exists only in this RUN's secret/tmpfs mounts.
-install -d -m 0750 -o root -g akmods /etc/pki/akmods/{certs,private}
-openssl x509 -in /run/secrets/qc71_signing_cert -outform DER \
-    -out /etc/pki/akmods/certs/public_key.der
-chmod 0644 /etc/pki/akmods/certs/public_key.der
-install -m 0640 -o root -g akmods /run/secrets/qc71_signing_key \
-    /etc/pki/akmods/private/private_key.priv
+    install -d -m 0750 -o root -g akmods /etc/pki/akmods/{certs,private}
+    openssl x509 -in /run/secrets/qc71_signing_cert -outform DER \
+        -out /etc/pki/akmods/certs/public_key.der
+    chmod 0644 /etc/pki/akmods/certs/public_key.der
+    install -m 0640 -o root -g akmods /run/secrets/qc71_signing_key \
+        /etc/pki/akmods/private/private_key.priv
+fi
 
 chmod 1777 /tmp /var/tmp
 install -d -o akmods -g akmods /var/lib/akmods
@@ -117,13 +117,15 @@ runuser -u akmods -- env HOME=/var/lib/akmods \
 
 RPMS=(/tmp/kmod-slimbook-qc71-"${KERNEL}"-*.rpm)
 [[ ${#RPMS[@]} -eq 1 ]]
-install -d /out
-install -m 0644 "${RPMS[0]}" /out/qc71.rpm
-install -m 0644 /etc/pki/akmods/certs/public_key.der /out/qc71-signing.der
+install -D -m 0644 "${RPMS[0]}" /out/qc71.rpm
+if [[ "${QC71_SIGN}" == true ]]; then
+    install -m 0644 /etc/pki/akmods/certs/public_key.der /out/qc71-signing.der
+fi
 EOF
 
-# Keep the original Bluefin image plus Executive's runtime dependencies.
+# Fresh Bluefin DX plus Executive's runtime dependencies. No build tools copied.
 FROM ${BASE_IMAGE} AS final
+ARG QC71_SIGN
 
 RUN --network=none \
     --mount=type=tmpfs,target=/run \
@@ -137,8 +139,9 @@ RUN --network=none \
     --mount=type=tmpfs,target=/var/lib/dnf <<'EOF' bash
 set -euo pipefail
 KERNEL="$(cat /run/build-inputs/kernel)"
+(cd /run/build-inputs && sha256sum --check --quiet manifest.sha256)
 
-# Upstream RPM signatures stay checked; the locally built RPM is not RPM-signed.
+# Check upstream RPM signatures; only the locally built RPM is exempt.
 dnf5 --repo=build-inputs install -y \
     --setopt=install_weak_deps=0 --setopt=localpkg_gpgcheck=0 \
     --exclude='akmod-*' /run/qc71/qc71.rpm slimbook-meta-executive
@@ -146,8 +149,13 @@ dnf5 --repo=build-inputs install -y \
 depmod -a "${KERNEL}"
 VERMAGIC="$(modinfo -k "${KERNEL}" -F vermagic qc71_laptop)"
 [[ "${VERMAGIC%% *}" = "${KERNEL}" ]]
+[[ "${QC71_SIGN}" == true || "${QC71_SIGN}" == false ]]
+if [[ "${QC71_SIGN}" == false ]]; then
+    echo 'PR validation: module compiled; release signature checks are not run.'
+    exit 0
+fi
 
-# Verify the actual installed module against our certificate, not its signer label.
+# Verify the installed module's CMS signature, not just its signer label.
 python3 - "$(modinfo -k "${KERNEL}" -n qc71_laptop)" <<'PY'
 import gzip
 import lzma
@@ -179,8 +187,6 @@ openssl x509 -inform DER -in /run/qc71/qc71-signing.der -out /tmp/qc71.crt
 openssl cms -verify -binary -inform DER -in /tmp/qc71.p7s \
     -content /tmp/qc71.unsigned -nointern -certfile /tmp/qc71.crt \
     -noverify -out /dev/null
-
-systemctl enable slimbook-service.service
 EOF
 
 RUN bootc container lint --fatal-warnings
